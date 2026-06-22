@@ -127,6 +127,14 @@ setup_base_packages() {
         return
     fi
 
+    # Спрашиваем про преднастройку SSH до начала установки, чтобы не прерывать процесс в середине
+    local configure_ssh=false
+    if [[ "$choices" =~ "SSH" ]]; then
+        if whiptail --title "Настройка SSH" --yesno "Вы выбрали установку SSH.\nХотите применить вашу преднастройку конфигурации?\n\n- Порт: 22\n- Вход для root по паролю: Разрешен\n- Ограничение доступа: Только из локальных сетей (192.168.*, 10.*, 172.*, 127.*)" 14 65; then
+            configure_ssh=true
+        fi
+    fi
+
     show_progress "Установка выбранных пакетов: ${pkgs_to_install[*]}..."
     $SUDO apt-get update >> "$LOG_FILE" 2>&1
     
@@ -140,6 +148,28 @@ setup_base_packages() {
         log_info "Запуск и включение автозапуска OpenSSH службы..."
         $SUDO systemctl enable ssh >> "$LOG_FILE" 2>&1 || true
         $SUDO systemctl start ssh >> "$LOG_FILE" 2>&1 || true
+        
+        if [ "$configure_ssh" = true ]; then
+            log_info "Применение преднастройки конфигурации SSH..."
+            
+            # Делаем резервную копию оригинального конфига
+            if [ -f /etc/ssh/sshd_config ]; then
+                $SUDO cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+            fi
+            
+            # Записываем новую конфигурацию
+            echo "Port 22
+PermitRootLogin yes
+PasswordAuthentication yes
+ListenAddress 0.0.0.0
+AllowUsers *@192.168.*.* *@127.0.0.1 *@10.*.*.* *@172.*.*.*
+Subsystem sftp /usr/lib/openssh/sftp-server" | $SUDO tee /etc/ssh/sshd_config > /dev/null
+
+            # Перезапускаем сервис SSH
+            $SUDO systemctl restart ssh >> "$LOG_FILE" 2>&1 || $SUDO systemctl restart sshd >> "$LOG_FILE" 2>&1 || true
+            log_info "Преднастройка конфигурации SSH успешно применена."
+            whiptail --title "Настройка SSH" --msgbox "Преднастройка конфигурации SSH успешно применена!\nСлужба OpenSSH перезапущена." 10 55
+        fi
     fi
 
     log_info "Выбранные программы успешно установлены."
