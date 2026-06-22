@@ -55,7 +55,7 @@ install_script_deps() {
     log_info "Проверка необходимых зависимостей для работы скрипта (curl, jq, whiptail)..."
     $SUDO apt-get update >> "$LOG_FILE" 2>&1
     
-    local deps_needed=()
+    local -a deps_needed=()
     for pkg in curl jq whiptail; do
         if ! dpkg -s "$pkg" >/dev/null 2>&1; then
             deps_needed+=("$pkg")
@@ -85,12 +85,29 @@ setup_russian_locale() {
     show_progress "Настройка русской локали (ru_RU.UTF-8)..."
     log_info "Запуск настройки русской локали..."
     
-    $SUDO apt-get install -y locales >> "$LOG_FILE" 2>&1
-    $SUDO locale-gen ru_RU.UTF-8 >> "$LOG_FILE" 2>&1
-    $SUDO update-locale LANG=ru_RU.UTF-8 >> "$LOG_FILE" 2>&1
+    # Устанавливаем необходимые пакеты локализации
+    $SUDO apt-get install -y locales language-pack-ru language-pack-ru-base >> "$LOG_FILE" 2>&1
     
-    log_info "Локаль настроена на ru_RU.UTF-8. Изменения применятся после релогина."
-    whiptail --title "Настройка локали" --msgbox "Локаль ru_RU.UTF-8 успешно сгенерирована!\nПожалуйста, переподключитесь к серверу после завершения работы скрипта, чтобы изменения вступили в силу." 10 60
+    # Генерируем локаль
+    $SUDO locale-gen ru_RU.UTF-8 >> "$LOG_FILE" 2>&1
+    
+    # Принудительно настраиваем системные переменные в /etc/default/locale
+    echo "LANG=ru_RU.UTF-8" | $SUDO tee /etc/default/locale > /dev/null
+    echo "LANGUAGE=ru_RU:ru" | $SUDO tee -a /etc/default/locale > /dev/null
+    echo "LC_ALL=ru_RU.UTF-8" | $SUDO tee -a /etc/default/locale > /dev/null
+    
+    # Обновляем локали через update-locale
+    $SUDO update-locale LANG=ru_RU.UTF-8 LANGUAGE=ru_RU:ru LC_ALL=ru_RU.UTF-8 >> "$LOG_FILE" 2>&1
+    
+    # Прописываем экспорт локали в глобальный bashrc для гарантированного применения в сессиях
+    if ! grep -q "ru_RU.UTF-8" /etc/bash.bashrc 2>/dev/null; then
+        echo 'export LANG=ru_RU.UTF-8' | $SUDO tee -a /etc/bash.bashrc > /dev/null
+        echo 'export LANGUAGE=ru_RU:ru' | $SUDO tee -a /etc/bash.bashrc > /dev/null
+        echo 'export LC_ALL=ru_RU.UTF-8' | $SUDO tee -a /etc/bash.bashrc > /dev/null
+    fi
+    
+    log_info "Локаль настроена на ru_RU.UTF-8. Изменения применятся после релогина или перезагрузки."
+    whiptail --title "Настройка локали" --msgbox "Локаль ru_RU.UTF-8 успешно установлена на систему!\nПосле завершения настройки рекомендуется перезагрузить сервер или переподключиться по SSH." 10 60
 }
 
 # Установка часового пояса "Asia/Novokuznetsk"
@@ -117,7 +134,7 @@ setup_base_packages() {
     log_info "Начало установки базовых пакетов: $choices"
     
     # Преобразуем выбор в массив
-    local pkgs_to_install=()
+    local -a pkgs_to_install=()
     if [[ "$choices" =~ "NANO" ]]; then pkgs_to_install+=("nano"); fi
     if [[ "$choices" =~ "ZIP" ]]; then pkgs_to_install+=("zip" "unzip"); fi
     if [[ "$choices" =~ "GIT" ]]; then pkgs_to_install+=("git"); fi
@@ -217,7 +234,7 @@ setup_nodejs() {
     log_info "Опрос официального API Node.js для поиска LTS-версий..."
 
     # Скачиваем список версий в формате JSON, фильтруем LTS-релизы, берем уникальные мажорные номера
-    local node_versions=()
+    local -a node_versions=()
     local api_response
     api_response=$(curl -s https://nodejs.org/dist/index.json 2>/dev/null || echo "")
     
