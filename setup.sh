@@ -12,6 +12,9 @@
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 
+# Отключаем интерактивные запросы (debconf) при установке пакетов apt-get
+export DEBIAN_FRONTEND=noninteractive
+
 # Определяем, нужен ли sudo для системных команд
 SUDO=""
 if [ "$EUID" -ne 0 ]; then
@@ -607,7 +610,7 @@ menu_server_settings() {
     while true; do
         local locale_desc="Установить русскую локаль (ru_RU.UTF-8)"
         local locale_state="ON"
-        if locale 2>/dev/null | grep -q "LANG=ru_RU.UTF-8"; then
+        if grep -q "ru_RU.UTF-8" /etc/default/locale 2>/dev/null; then
             locale_desc="Установить русскую локаль (ru_RU.UTF-8) (уже установлена)"
             locale_state="OFF"
         fi
