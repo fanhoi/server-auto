@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Проверка интерпретатора (требуется bash, а не sh)
+[ -z "${BASH_VERSION:-}" ] && echo "Ошибка: скрипт требует bash для выполнения." >&2 && exit 1
 
 # ==============================================================================
 # server-auto: Скрипт автоматической первоначальной настройки серверов на Ubuntu и Debian.
@@ -27,6 +29,9 @@ if [ -f /etc/os-release ]; then
     OS_ID=$(. /etc/os-release && echo "$ID")
 fi
 
+# Флаг однократного обновления индекса APT за одну сессию скрипта
+APT_UPDATED=false
+
 # ==============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==============================================================================
@@ -41,9 +46,21 @@ log_error() {
     echo -e "\e[31m[ERROR]\e[0m $1" >&2
 }
 
+# Обновление индекса APT — запускается только один раз за сессию (используйте эту функцию вместо прямого apt-get update)
+run_apt_update() {
+    if [ "$APT_UPDATED" = true ]; then
+        return 0
+    fi
+    if ! $SUDO apt-get update >/dev/null 2>&1; then
+        return 1
+    fi
+    APT_UPDATED=true
+}
+
 # Предварительная проверка и установка зависимостей самого скрипта
 install_script_deps() {
-    if ! $SUDO apt-get update >/dev/null 2>&1; then
+    echo "[server-auto] Первоначальная подготовка: обновление списков пакетов APT..."
+    if ! run_apt_update; then
         log_error "Не удалось обновить списки пакетов apt-get update перед установкой зависимостей."
         return 1
     fi
@@ -56,6 +73,7 @@ install_script_deps() {
     done
 
     if [ ${#deps_needed[@]} -gt 0 ]; then
+        echo "[server-auto] Установка базовых зависимостей: ${deps_needed[*]}..."
         if ! $SUDO apt-get install -y "${deps_needed[@]}" >/dev/null 2>&1; then
             log_error "Не удалось установить базовые зависимости скрипта: ${deps_needed[*]}."
             exit 1
@@ -112,13 +130,13 @@ setup_russian_locale() {
     
     if [ "$OS_ID" = "ubuntu" ]; then
         # Для Ubuntu ставим готовый языковой пакет
-        if ! $SUDO apt-get update >/dev/null 2>&1 || ! $SUDO apt-get install -y language-pack-ru >/dev/null 2>&1; then
+        if ! run_apt_update || ! $SUDO apt-get install -y language-pack-ru >/dev/null 2>&1; then
             whiptail --title "Ошибка локализации" --msgbox "Не удалось установить пакет локализации language-pack-ru. Проверьте интернет-соединение." 10 60
             return 1
         fi
     elif [ "$OS_ID" = "debian" ]; then
         # Для Debian устанавливаем locales и генерируем локаль вручную
-        if ! $SUDO apt-get update >/dev/null 2>&1 || ! $SUDO apt-get install -y locales >/dev/null 2>&1; then
+        if ! run_apt_update || ! $SUDO apt-get install -y locales >/dev/null 2>&1; then
             whiptail --title "Ошибка локализации" --msgbox "Не удалось установить пакет locales. Проверьте интернет-соединение." 10 60
             return 1
         fi
@@ -212,7 +230,7 @@ setup_base_packages() {
     fi
 
     show_progress "Установка выбранных пакетов: ${pkgs_to_install[*]}..."
-    if ! $SUDO apt-get update >/dev/null 2>&1; then
+    if ! run_apt_update; then
         whiptail --title "Ошибка" --msgbox "Не удалось обновить списки пакетов apt. Проверьте подключение к сети." 10 60
         return 1
     fi
@@ -245,14 +263,14 @@ setup_base_packages() {
 PermitRootLogin yes
 PasswordAuthentication yes
 ListenAddress 0.0.0.0
-AllowUsers *@192.168.*.* *@127.0.0.1 *@10.*.*.* *@172.*.*.*
+AllowUsers *@192.168.1.* *@127.0.0.1
 Subsystem sftp /usr/lib/openssh/sftp-server" | $SUDO tee /etc/ssh/sshd_config > /dev/null
 
-            # Перезапускаем сервис SSH
-            if ! $SUDO systemctl restart ssh >/dev/null 2>&1 && ! $SUDO systemctl restart sshd >/dev/null 2>&1; then
-                whiptail --title "Предупреждение" --msgbox "Конфигурация SSH записана, но не удалось перезапустить службу ssh/sshd." 10 60
-            else
+            # Перезапускаем сервис SSH (пробуем ssh — Ubuntu, при ошибке пробуем sshd — Debian)
+            if $SUDO systemctl restart ssh >/dev/null 2>&1 || $SUDO systemctl restart sshd >/dev/null 2>&1; then
                 whiptail --title "Настройка SSH" --msgbox "Преднастройка конфигурации SSH успешно применена!\nСлужба OpenSSH перезапущена." 10 55
+            else
+                whiptail --title "Предупреждение" --msgbox "Конфигурация SSH записана, но не удалось перезапустить службу ssh/sshd." 10 60
             fi
         fi
     fi
@@ -270,6 +288,7 @@ setup_docker() {
     done
 
     # Установка базовых утилит для репозиториев apt
+    run_apt_update
     if ! $SUDO apt-get install -y ca-certificates curl >/dev/null 2>&1; then
         whiptail --title "Ошибка" --msgbox "Не удалось установить вспомогательные утилиты ca-certificates и curl." 10 60
         return 1
@@ -339,10 +358,13 @@ setup_docker() {
         local docker_group_msg="Docker установлен для пользователя root."
     fi
 
-    # Создание символической ссылки docker-compose для обратной совместимости
-    if [ -f /usr/libexec/docker/cli-plugins/docker-compose ]; then
-        $SUDO ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose >/dev/null 2>&1
-    fi
+    # Создание символической ссылки docker-compose для обратной совместимости (ищем в двух возможных путях)
+    for _compose_path in /usr/libexec/docker/cli-plugins/docker-compose /usr/lib/docker/cli-plugins/docker-compose; do
+        if [ -f "$_compose_path" ]; then
+            $SUDO ln -sf "$_compose_path" /usr/local/bin/docker-compose >/dev/null 2>&1
+            break
+        fi
+    done
 
     local docker_ver
     docker_ver=$(docker --version 2>/dev/null || echo "Неизвестно")
