@@ -39,7 +39,7 @@ chmod +x setup.sh
 Когда вы опубликуете скрипт на GitHub, вы сможете запускать его на любом чистом сервере без предварительного скачивания всего репозитория:
 
 ```bash
-sudo apt update && sudo apt install -y curl && bash -c "$(curl -fsSL https://raw.githubusercontent.com/fanhoi/ubuntu-auto/main/setup.sh)"
+bash -c "$(wget -qO- https://raw.githubusercontent.com/fanhoi/ubuntu-auto/main/setup.sh)"
 ```
 
 ## Требования
