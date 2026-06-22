@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# ubuntu-auto: Скрипт автоматической первоначальной настройки серверов на Ubuntu.
+# ubuntu-auto: Скрипт автоматической первоначальной настройки серверов на Ubuntu и Debian.
 # Использование: Выполняет локализацию, настройку таймзоны, автологин LXC,
 # установку Docker, Node.js и базового ПО через TUI-меню.
 # ==============================================================================
@@ -281,13 +281,7 @@ setup_docker() {
     local repo_url="https://download.docker.com/linux/ubuntu"
     local codename
     if [ -f /etc/os-release ]; then
-        codename=$(. /etc/os-release
-            if [ -n "$VERSION_CODENAME" ]; then
-                echo "$VERSION_CODENAME"
-            elif [ -n "$VERSION_CODENODE" ]; then
-                echo "$VERSION_CODENODE"
-            fi
-        )
+        codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
     fi
     
     # Если не удалось получить из /etc/os-release, пробуем lsb_release
@@ -297,14 +291,12 @@ setup_docker() {
     
     if [ "$OS_ID" = "debian" ]; then
         repo_url="https://download.docker.com/linux/debian"
-        if [ -z "$codename" ]; then
-            codename="bookworm" # Крайний резервный вариант
-        fi
-    else
-        # По умолчанию Ubuntu
-        if [ -z "$codename" ]; then
-            codename="jammy" # Крайний резервный вариант
-        fi
+    fi
+
+    if [ -z "$codename" ]; then
+        whiptail --title "Ошибка" --msgbox \
+            "Не удалось определить codename Linux-дистрибутива через /etc/os-release или lsb_release." 10 70
+        return 1
     fi
 
     # Добавление официального GPG ключа Docker
