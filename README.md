@@ -1,4 +1,4 @@
-# Скрипт автонастройки серверов (Debian / Ubuntu)
+# Скрипт автонастройки серверов server-auto (Debian / Ubuntu)
 
 Интерактивный Bash-скрипт с терминальным графическим интерфейсом (TUI) на базе `whiptail`, предназначенный для быстрой первоначальной настройки и установки необходимого ПО на чистых серверах под управлением ОС Debian и Ubuntu.
 
@@ -39,7 +39,7 @@ chmod +x setup.sh
 Когда вы опубликуете скрипт на GitHub, вы сможете запускать его на любом чистом сервере без предварительного скачивания всего репозитория:
 
 ```bash
-bash -c "$(wget -qO- https://raw.githubusercontent.com/fanhoi/ubuntu-auto/main/setup.sh)"
+bash -c "$(wget -qO- https://raw.githubusercontent.com/fanhoi/server-auto/main/setup.sh)"
 ```
 
 ## Требования
