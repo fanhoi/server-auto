@@ -232,13 +232,21 @@ setup_docker() {
 setup_nodejs() {
     show_progress "Получение списка актуальных версий Node.js..."
 
-    # Скачиваем список версий в формате JSON, фильтруем LTS-релизы, берем уникальные мажорные номера
+    # Скачиваем список версий в формате JSON, берем Current (последний) и LTS релизы
     local -a node_versions=()
     local api_response
     api_response=$(curl -s https://nodejs.org/dist/index.json 2>/dev/null || echo "")
     
     if [ -n "$api_response" ] && command -v jq >/dev/null 2>&1; then
-        # Читаем мажорные версии LTS релизов
+        # Получаем самую последнюю мажорную версию (Current)
+        local current_major
+        current_major=$(echo "$api_response" | jq -r '.[0].version' | cut -d'.' -f1 | sed 's/v//')
+        
+        # Получаем мажорные версии LTS релизов
+        local lts_majors
+        lts_majors=$(echo "$api_response" | jq -r '.[] | select(.lts != false) | .version' | cut -d'.' -f1 | uniq | sed 's/v//')
+        
+        # Объединяем их (Current + LTS)
         local is_first=true
         while read -r ver; do
             if [ -n "$ver" ]; then
@@ -247,23 +255,30 @@ setup_nodejs() {
                     status="ON"
                     is_first=false
                 fi
-                node_versions+=("$ver" "Node.js v$ver LTS" "$status")
+                
+                local desc="Node.js v$ver LTS"
+                if [ "$ver" = "$current_major" ]; then
+                    desc="Node.js v$ver (Current)"
+                fi
+                node_versions+=("$ver" "$desc" "$status")
             fi
-        done < <(echo "$api_response" | jq -r '.[] | select(.lts != false) | .version' | cut -d'.' -f1 | uniq | sed 's/v//' | head -n 4)
+        done < <(printf "%s\n%s" "$current_major" "$lts_majors" | uniq | head -n 5)
     fi
 
     if [ ${#node_versions[@]} -eq 0 ]; then
         node_versions=(
-            "22" "Node.js v22 (Текущая LTS)" "ON"
-            "20" "Node.js v20 (Предыдущая LTS)" "OFF"
-            "18" "Node.js v18 (Старая LTS)" "OFF"
+            "26" "Node.js v26 (Current)" "ON"
+            "24" "Node.js v24 (LTS)" "OFF"
+            "22" "Node.js v22 (LTS)" "OFF"
+            "20" "Node.js v20 (LTS)" "OFF"
+            "18" "Node.js v18 (LTS)" "OFF"
         )
     fi
 
     # Показываем TUI-меню выбора версии Node.js
     local node_choice
     node_choice=$(whiptail --title "Выбор версии Node.js" --radiolist \
-        "Выберите мажорную версию Node.js для установки через репозиторий NodeSource:" 15 65 4 \
+        "Выберите мажорную версию Node.js для установки через репозиторий NodeSource:" 16 65 5 \
         "${node_versions[@]}" 3>&1 1>&2 2>&3)
 
     if [ $? -ne 0 ] || [ -z "$node_choice" ]; then
