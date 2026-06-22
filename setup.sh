@@ -2,8 +2,8 @@
 
 # ==============================================================================
 # ubuntu-auto: Скрипт автоматической первоначальной настройки серверов на Ubuntu.
-# Использование: Выполняет локализацию, настройку таймзоны, установку Docker,
-# Node.js (с динамическим выбором версии) и базового ПО через TUI-меню.
+# Использование: Выполняет локализацию, настройку таймзоны, автологин LXC,
+# установку Docker, Node.js и базового ПО через TUI-меню.
 # ==============================================================================
 
 # Строгий режим обработки ошибок
@@ -13,9 +13,6 @@ set -o pipefail
 # Принудительная установка UTF-8 локали для корректного отображения кириллицы в whiptail
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
-
-# Файл лога выполнения скрипта
-LOG_FILE="/var/log/ubuntu-setup.log"
 
 # Определяем, нужен ли sudo для системных команд
 SUDO=""
@@ -28,32 +25,23 @@ if [ "$EUID" -ne 0 ]; then
     fi
 fi
 
-# Инициализация файла лога (в /var/log/ или в текущей директории при нехватке прав)
-if ! $SUDO touch "$LOG_FILE" 2>/dev/null; then
-    LOG_FILE="./ubuntu-setup.log"
-    touch "$LOG_FILE"
-fi
-
 # ==============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ЛОГИРОВАНИЕ И ЗАВИСИМОСТИ)
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==============================================================================
 
-# Функция для вывода информационных сообщений
+# Функция для вывода информационных сообщений (на случай вывода вне TUI)
 log_info() {
     echo -e "\e[32m[INFO]\e[0m $1"
-    echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
 }
 
 # Функция для вывода ошибок
 log_error() {
     echo -e "\e[31m[ERROR]\e[0m $1" >&2
-    echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
 }
 
 # Предварительная проверка и установка зависимостей самого скрипта
 install_script_deps() {
-    log_info "Проверка необходимых зависимостей для работы скрипта (curl, jq, whiptail)..."
-    $SUDO apt-get update >> "$LOG_FILE" 2>&1
+    $SUDO apt-get update >/dev/null 2>&1
     
     local -a deps_needed=()
     for pkg in curl jq whiptail; do
@@ -63,10 +51,7 @@ install_script_deps() {
     done
 
     if [ ${#deps_needed[@]} -gt 0 ]; then
-        log_info "Установка недостающих зависимостей: ${deps_needed[*]}..."
-        $SUDO apt-get install -y "${deps_needed[@]}" >> "$LOG_FILE" 2>&1
-    else
-        log_info "Все базовые зависимости уже установлены."
+        $SUDO apt-get install -y "${deps_needed[@]}" >/dev/null 2>&1
     fi
 }
 
@@ -83,27 +68,40 @@ show_progress() {
 # Установка русского языка (локали ru_RU.UTF-8)
 setup_russian_locale() {
     show_progress "Настройка русской локали (ru_RU.UTF-8)..."
-    log_info "Запуск настройки русской локали..."
     
-    $SUDO apt-get update >> "$LOG_FILE" 2>&1
-    $SUDO apt-get install -y language-pack-ru >> "$LOG_FILE" 2>&1
-    $SUDO update-locale LANG=ru_RU.UTF-8 >> "$LOG_FILE" 2>&1
+    $SUDO apt-get update >/dev/null 2>&1
+    $SUDO apt-get install -y language-pack-ru >/dev/null 2>&1
+    $SUDO update-locale LANG=ru_RU.UTF-8 >/dev/null 2>&1
     
-    log_info "Локаль настроена на ru_RU.UTF-8 через update-locale."
     whiptail --title "Настройка локали" --msgbox "Русский язык успешно установлен!\nИзменения вступят в силу после перезагрузки сервера или нового входа по SSH." 10 60
 }
 
 # Установка часового пояса "Asia/Novokuznetsk"
 setup_timezone() {
     show_progress "Установка часового пояса Asia/Novokuznetsk..."
-    log_info "Установка часового пояса Asia/Novokuznetsk..."
-    
-    $SUDO timedatectl set-timezone Asia/Novokuznetsk >> "$LOG_FILE" 2>&1
+    $SUDO timedatectl set-timezone Asia/Novokuznetsk >/dev/null 2>&1
     
     local current_time
     current_time=$(date)
-    log_info "Часовой пояс успешно изменен. Текущее время на сервере: $current_time"
     whiptail --title "Настройка времени" --msgbox "Часовой пояс Asia/Novokuznetsk успешно установлен.\nТекущее системное время:\n$current_time" 10 60
+}
+
+# Настройка автологина root для LXC-контейнеров Proxmox
+setup_lxc_autologin() {
+    show_progress "Настройка автологина root для LXC..."
+    
+    local dir="/etc/systemd/system/container-getty@1.service.d"
+    local conf="$dir/override.conf"
+    
+    $SUDO mkdir -p "$dir" >/dev/null 2>&1
+    
+    echo "[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 \$TERM" | $SUDO tee "$conf" > /dev/null
+
+    $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
+    
+    whiptail --title "Настройка LXC" --msgbox "Автоматический вход root для контейнера LXC успешно настроен!\nИзменения применятся при следующем запуске контейнера." 10 60
 }
 
 # Установка выбранных базовых программ
@@ -114,8 +112,6 @@ setup_base_packages() {
         return
     fi
 
-    log_info "Начало установки базовых пакетов: $choices"
-    
     # Преобразуем выбор в массив
     local -a pkgs_to_install=()
     if [[ "$choices" =~ "NANO" ]]; then pkgs_to_install+=("nano"); fi
@@ -129,7 +125,7 @@ setup_base_packages() {
         return
     fi
 
-    # Спрашиваем про преднастройку SSH до начала установки, чтобы не прерывать процесс в середине
+    # Спрашиваем про преднастройку SSH до начала установки
     local configure_ssh=false
     if [[ "$choices" =~ "SSH" ]]; then
         if whiptail --title "Настройка SSH" --yesno "Вы выбрали установку SSH.\nХотите применить вашу преднастройку конфигурации?\n\n- Порт: 22\n- Вход для root по паролю: Разрешен\n- Ограничение доступа: Только из локальных сетей (192.168.*, 10.*, 172.*, 127.*)" 14 65; then
@@ -138,22 +134,18 @@ setup_base_packages() {
     fi
 
     show_progress "Установка выбранных пакетов: ${pkgs_to_install[*]}..."
-    $SUDO apt-get update >> "$LOG_FILE" 2>&1
+    $SUDO apt-get update >/dev/null 2>&1
     
     for pkg in "${pkgs_to_install[@]}"; do
-        log_info "Установка пакета: $pkg"
-        $SUDO apt-get install -y "$pkg" >> "$LOG_FILE" 2>&1
+        $SUDO apt-get install -y "$pkg" >/dev/null 2>&1
     done
 
     # Дополнительная настройка для SSH, если он устанавливался
     if [[ "$choices" =~ "SSH" ]]; then
-        log_info "Запуск и включение автозапуска OpenSSH службы..."
-        $SUDO systemctl enable ssh >> "$LOG_FILE" 2>&1 || true
-        $SUDO systemctl start ssh >> "$LOG_FILE" 2>&1 || true
+        $SUDO systemctl enable ssh >/dev/null 2>&1 || true
+        $SUDO systemctl start ssh >/dev/null 2>&1 || true
         
         if [ "$configure_ssh" = true ]; then
-            log_info "Применение преднастройки конфигурации SSH..."
-            
             # Делаем резервную копию оригинального конфига
             if [ -f /etc/ssh/sshd_config ]; then
                 $SUDO cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
@@ -168,39 +160,35 @@ AllowUsers *@192.168.*.* *@127.0.0.1 *@10.*.*.* *@172.*.*.*
 Subsystem sftp /usr/lib/openssh/sftp-server" | $SUDO tee /etc/ssh/sshd_config > /dev/null
 
             # Перезапускаем сервис SSH
-            $SUDO systemctl restart ssh >> "$LOG_FILE" 2>&1 || $SUDO systemctl restart sshd >> "$LOG_FILE" 2>&1 || true
-            log_info "Преднастройка конфигурации SSH успешно применена."
+            $SUDO systemctl restart ssh >/dev/null 2>&1 || $SUDO systemctl restart sshd >/dev/null 2>&1 || true
             whiptail --title "Настройка SSH" --msgbox "Преднастройка конфигурации SSH успешно применена!\nСлужба OpenSSH перезапущена." 10 55
         fi
     fi
 
-    log_info "Выбранные программы успешно установлены."
     whiptail --title "Установка ПО" --msgbox "Следующие программы успешно установлены:\n${pkgs_to_install[*]}" 10 60
 }
 
 # Установка Docker, Docker Compose плагина и создание совместимого симлинка
 setup_docker() {
     show_progress "Установка Docker и Docker Compose..."
-    log_info "Начало установки Docker..."
 
-    # Удаляем потенциально конфликтующие старые пакеты
+    # ... удаляем потенциально конфликтующие старые пакеты
     for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
-        $SUDO apt-get remove -y "$pkg" >> "$LOG_FILE" 2>&1 || true
+        $SUDO apt-get remove -y "$pkg" >/dev/null 2>&1 || true
     done
 
     # Установка базовых утилит для репозиториев apt
-    $SUDO apt-get install -y ca-certificates curl >> "$LOG_FILE" 2>&1
-    $SUDO install -m 0755 -d /etc/apt/keyrings >> "$LOG_FILE" 2>&1
+    $SUDO apt-get install -y ca-certificates curl >/dev/null 2>&1
+    $SUDO install -m 0755 -d /etc/apt/keyrings >/dev/null 2>&1
 
     # Добавление официального GPG ключа Docker
-    $SUDO curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc >> "$LOG_FILE" 2>&1
-    $SUDO chmod a+r /etc/apt/keyrings/docker.asc >> "$LOG_FILE" 2>&1
+    $SUDO curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc >/dev/null 2>&1
+    $SUDO chmod a+r /etc/apt/keyrings/docker.asc >/dev/null 2>&1
 
     # Определение кодового имени Ubuntu (например, focal, jammy, noble)
     local ubuntu_codename
     ubuntu_codename=$(. /etc/os-release && echo "$VERSION_CODENAME" 2>/dev/null || . /etc/os-release && echo "$VERSION_CODENODE")
     
-    # Резервный вариант на случай, если codename не определился
     if [ -z "$ubuntu_codename" ]; then
         ubuntu_codename="jammy"
     fi
@@ -210,19 +198,18 @@ setup_docker() {
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
       $ubuntu_codename stable" | $SUDO tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-    $SUDO apt-get update >> "$LOG_FILE" 2>&1
+    $SUDO apt-get update >/dev/null 2>&1
     
     # Установка пакетов Docker Engine
-    $SUDO apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$LOG_FILE" 2>&1
+    $SUDO apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1
 
     # Запуск и добавление демона в автозагрузку
-    $SUDO systemctl enable docker >> "$LOG_FILE" 2>&1
-    $SUDO systemctl start docker >> "$LOG_FILE" 2>&1
+    $SUDO systemctl enable docker >/dev/null 2>&1
+    $SUDO systemctl start docker >/dev/null 2>&1
 
     # Добавление пользователя в группу docker для работы без sudo
     if [ "$EUID" -ne 0 ] && [ -n "$USER" ]; then
-        $SUDO usermod -aG docker "$USER" >> "$LOG_FILE" 2>&1
-        log_info "Пользователь $USER добавлен в группу docker."
+        $SUDO usermod -aG docker "$USER" >/dev/null 2>&1
         local docker_group_msg="Пользователь $USER добавлен в группу docker.\nПерезайдите в сессию для применения прав."
     else
         local docker_group_msg="Docker установлен для пользователя root."
@@ -231,7 +218,6 @@ setup_docker() {
     # Создание символической ссылки docker-compose для обратной совместимости
     if [ -f /usr/libexec/docker/cli-plugins/docker-compose ]; then
         $SUDO ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
-        log_info "Создана символическая ссылка /usr/local/bin/docker-compose для обратной совместимости."
     fi
 
     local docker_ver
@@ -239,14 +225,12 @@ setup_docker() {
     local compose_ver
     compose_ver=$(docker compose version 2>/dev/null || echo "Неизвестно")
 
-    log_info "Docker успешно установлен. Версия: $docker_ver"
     whiptail --title "Установка Docker" --msgbox "Docker и Docker Compose успешно установлены!\n\nВерсия Docker: $docker_ver\nВерсия Compose: $compose_ver\n\n$docker_group_msg" 14 65
 }
 
 # Динамический опрос версий Node.js и их установка
 setup_nodejs() {
     show_progress "Получение списка актуальных версий Node.js..."
-    log_info "Опрос официального API Node.js для поиска LTS-версий..."
 
     # Скачиваем список версий в формате JSON, фильтруем LTS-релизы, берем уникальные мажорные номера
     local -a node_versions=()
@@ -268,9 +252,7 @@ setup_nodejs() {
         done < <(echo "$api_response" | jq -r '.[] | select(.lts != false) | .version' | cut -d'.' -f1 | uniq | sed 's/v//' | head -n 4)
     fi
 
-    # Резервный жесткий список версий, если API недоступно
     if [ ${#node_versions[@]} -eq 0 ]; then
-        log_info "Не удалось получить версии через API, используем резервный список."
         node_versions=(
             "22" "Node.js v22 (Текущая LTS)" "ON"
             "20" "Node.js v20 (Предыдущая LTS)" "OFF"
@@ -284,37 +266,31 @@ setup_nodejs() {
         "Выберите мажорную версию Node.js для установки через репозиторий NodeSource:" 15 65 4 \
         "${node_versions[@]}" 3>&1 1>&2 2>&3)
 
-    # Если пользователь нажал Cancel
     if [ $? -ne 0 ] || [ -z "$node_choice" ]; then
-        log_info "Установка Node.js отменена пользователем."
         return
     fi
 
     show_progress "Очистка старой версии Node.js..."
-    log_info "Удаление старых пакетов nodejs/npm и очистка репозиториев..."
-    $SUDO apt-get remove -y nodejs npm >> "$LOG_FILE" 2>&1 || true
-    $SUDO apt-get purge -y nodejs npm >> "$LOG_FILE" 2>&1 || true
-    $SUDO rm -f /etc/apt/sources.list.d/nodesource.list >> "$LOG_FILE" 2>&1 || true
-    $SUDO apt-get autoremove -y >> "$LOG_FILE" 2>&1 || true
+    $SUDO apt-get remove -y nodejs npm >/dev/null 2>&1 || true
+    $SUDO apt-get purge -y nodejs npm >/dev/null 2>&1 || true
+    $SUDO rm -f /etc/apt/sources.list.d/nodesource.list >/dev/null 2>&1 || true
+    $SUDO apt-get autoremove -y >/dev/null 2>&1 || true
 
     show_progress "Подключение репозитория NodeSource v${node_choice}.x..."
-    log_info "Запуск скрипта NodeSource для версии ${node_choice}..."
     if [ "$EUID" -ne 0 ]; then
-        curl -fsSL "https://deb.nodesource.com/setup_${node_choice}.x" | $SUDO -E bash - >> "$LOG_FILE" 2>&1
+        curl -fsSL "https://deb.nodesource.com/setup_${node_choice}.x" | $SUDO -E bash - >/dev/null 2>&1
     else
-        curl -fsSL "https://deb.nodesource.com/setup_${node_choice}.x" | bash - >> "$LOG_FILE" 2>&1
+        curl -fsSL "https://deb.nodesource.com/setup_${node_choice}.x" | bash - >/dev/null 2>&1
     fi
 
     show_progress "Установка Node.js v${node_choice}.x..."
-    log_info "Установка пакета nodejs..."
-    $SUDO apt-get install -y nodejs >> "$LOG_FILE" 2>&1
+    $SUDO apt-get install -y nodejs >/dev/null 2>&1
 
     local installed_node_ver
     installed_node_ver=$(node -v 2>/dev/null || echo "Неизвестно")
     local installed_npm_ver
     installed_npm_ver=$(npm -v 2>/dev/null || echo "Неизвестно")
 
-    log_info "Node.js успешно установлен. Версия: $installed_node_ver, NPM: $installed_npm_ver"
     whiptail --title "Установка Node.js" --msgbox "Node.js успешно установлен!\n\nВерсия Node.js: $installed_node_ver\nВерсия npm: $installed_npm_ver" 12 60
 }
 
@@ -322,14 +298,15 @@ setup_nodejs() {
 # ИНТЕРАКТИВНОЕ МЕНЮ (TUI)
 # ==============================================================================
 
-# Меню раздела: Настройка сервера (Локаль и Таймзона)
+# Меню раздела: Настройка сервера
 menu_server_settings() {
     while true; do
         local server_choice
         server_choice=$(whiptail --title "Настройка сервера" --checklist \
-            "Выберите действия по настройке системы (клавиша Пробел для выбора):" 15 65 2 \
+            "Выберите действия по настройке системы (клавиша Пробел для выбора):" 16 65 3 \
             "LOCALE" "Установить русскую локаль (ru_RU.UTF-8)" ON \
-            "TIMEZONE" "Установить часовой пояс Asia/Novokuznetsk" ON 3>&1 1>&2 2>&3)
+            "TIMEZONE" "Установить часовой пояс Asia/Novokuznetsk" ON \
+            "LXC_AUTO" "Настроить автологин root для LXC Proxmox" OFF 3>&1 1>&2 2>&3)
 
         if [ $? -ne 0 ]; then
             break # Возврат в главное меню
@@ -341,13 +318,16 @@ menu_server_settings() {
         if [[ "$server_choice" =~ "TIMEZONE" ]]; then
             setup_timezone
         fi
+        if [[ "$server_choice" =~ "LXC_AUTO" ]]; then
+            setup_lxc_autologin
+        fi
         
         whiptail --title "Настройка сервера" --msgbox "Выбранные настройки применены." 8 50
         break
     done
 }
 
-# Меню раздела: Установка базовых программ
+# ... Меню раздела: Установка базовых программ
 menu_base_apps() {
     while true; do
         local app_choices
@@ -374,16 +354,14 @@ main_menu() {
     while true; do
         local menu_choice
         menu_choice=$(whiptail --title "Ubuntu Auto Setup Script v1.0" --menu \
-            "Выберите раздел для продолжения настройки:" 16 65 6 \
-            "1" "Настройка сервера (Язык, Часовой пояс)" \
-            "2" "Установка базового ПО (Nano, Zip, Git, SSH)" \
+            "Выберите раздел для продолжения настройки:" 15 65 5 \
+            "1" "Настройка сервера (Локаль, Таймзона, LXC Автологин)" \
+            "2" "Установка базового ПО (Nano, Zip, Git, SSH, Сетевые утилиты)" \
             "3" "Установка Docker и Docker Compose" \
             "4" "Установка Node.js (динамический выбор версии)" \
-            "5" "Посмотреть лог-файл установки" \
-            "6" "Выйти из скрипта" 3>&1 1>&2 2>&3)
+            "5" "Выйти из скрипта" 3>&1 1>&2 2>&3)
 
-        if [ $? -ne 0 ] || [ "$menu_choice" = "6" ]; then
-            log_info "Завершение работы скрипта пользователем."
+        if [ $? -ne 0 ] || [ "$menu_choice" = "5" ]; then
             break
         fi
 
@@ -400,16 +378,8 @@ main_menu() {
             "4")
                 setup_nodejs
                 ;;
-            "5")
-                # Просмотр лог-файла в whiptail
-                if [ -f "$LOG_FILE" ]; then
-                    whiptail --title "Лог установки: $LOG_FILE" --textbox "$LOG_FILE" 20 75 --scrolltext
-                else
-                    whiptail --title "Лог установки" --msgbox "Лог-файл еще не создан." 8 50
-                fi
-                ;;
             *)
-                whiptail --title "Ошибка" --msgbox "Неизвестный выбор меню." 8 50
+                break
                 ;;
         esac
     done
@@ -422,12 +392,6 @@ main_menu() {
 # Очищаем экран перед запуском
 clear
 
-echo "========================================================"
-echo "      Запуск скрипта автонастройки Ubuntu Auto Setup     "
-echo "========================================================"
-echo "Лог-файл процесса: $LOG_FILE"
-echo "========================================================"
-
 # Сначала устанавливаем curl, jq, whiptail
 install_script_deps
 
@@ -439,7 +403,6 @@ clear
 echo "========================================================"
 echo "        Настройка завершена! Спасибо за использование.   "
 echo "========================================================"
-echo "Лог-файл сохранен в: $LOG_FILE"
 echo "Рекомендуется перезапустить терминал / переподключиться к SSH"
 echo "для корректного применения языковых настроек и прав Docker."
 echo "========================================================"
