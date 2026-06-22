@@ -122,6 +122,8 @@ setup_base_packages() {
     if [[ "$choices" =~ "ZIP" ]]; then pkgs_to_install+=("zip" "unzip"); fi
     if [[ "$choices" =~ "GIT" ]]; then pkgs_to_install+=("git"); fi
     if [[ "$choices" =~ "SSH" ]]; then pkgs_to_install+=("openssh-server"); fi
+    if [[ "$choices" =~ "SPEEDTEST" ]]; then pkgs_to_install+=("speedtest-cli"); fi
+    if [[ "$choices" =~ "IPERF" ]]; then pkgs_to_install+=("iperf3"); fi
 
     if [ ${#pkgs_to_install[@]} -eq 0 ]; then
         return
@@ -350,11 +352,13 @@ menu_base_apps() {
     while true; do
         local app_choices
         app_choices=$(whiptail --title "Установка базового ПО" --checklist \
-            "Выберите программы для установки (клавиша Пробел для выбора):" 15 65 4 \
+            "Выберите программы для установки (клавиша Пробел для выбора):" 17 65 6 \
             "NANO" "Удобный текстовый редактор Nano" ON \
             "ZIP" "Архиваторы zip и unzip" ON \
             "GIT" "Система контроля версий Git" ON \
-            "SSH" "SSH-сервер openssh-server" ON 3>&1 1>&2 2>&3)
+            "SSH" "SSH-сервер openssh-server" ON \
+            "SPEEDTEST" "Консольный тест скорости Speedtest CLI" ON \
+            "IPERF" "Утилита измерения сети iperf3" ON 3>&1 1>&2 2>&3)
 
         if [ $? -ne 0 ]; then
             break # Возврат в главное меню
